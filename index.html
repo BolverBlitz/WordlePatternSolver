@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wordle Detective</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .pattern-input {
+            text-align: center;
+            font-size: 1.25rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            border-radius: 0.375rem;
+            caret-color: transparent;
+        }
+        .input-G { background-color: #538d4e; color: white; border-color: #538d4e; }
+        .input-Y { background-color: #b59f3b; color: white; border-color: #b59f3b; }
+        .input-B { background-color: #3a3a3c; color: white; border-color: #3a3a3c; }
+        .input-default { background-color: #121213; color: white; border-color: #3a3a3c; }
+        #solver-button:disabled, #verify-button:disabled { cursor: not-allowed; opacity: 0.5; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-2xl bg-gray-800 rounded-2xl shadow-2xl p-6 md:p-8 space-y-6">
+        <div class="text-center">
+            <h1 class="text-3xl md:text-4xl font-bold text-white">Wordle Detective</h1>
+            <p class="mt-2 text-gray-400">Add your friends' full games to find the answer.</p>
+        </div>
+
+        <div id="friends-container" class="space-y-6"></div>
+
+        <div class="flex justify-center border-t border-gray-700 pt-6">
+            <button id="add-friend-button" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-5 rounded-lg transition-all duration-200">
+                + Add Friend's Grid
+            </button>
+        </div>
+        
+        <div class="text-center pt-4 space-y-4">
+            <button id="solver-button" class="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-12 rounded-lg shadow-lg transform hover:scale-105 transition-all duration-300 ease-in-out text-lg">
+                Solve
+            </button>
+            <p id="status-text" class="text-gray-400 h-5"></p>
+        </div>
+
+        <div id="troubleshoot-section" class="pt-6 border-t border-gray-700 space-y-4">
+             <h2 class="text-xl font-semibold text-center">Troubleshoot</h2>
+             <p class="text-center text-gray-400 text-sm">Know the answer? Verify it against the grids to check for errors.</p>
+             <div class="flex items-center justify-center gap-3">
+                 <input type="text" id="known-solution-input" placeholder="ENTER 5-LETTER WORD" maxlength="5" class="pattern-input input-default w-64 h-12 tracking-widest" style="caret-color: white;">
+                 <button id="verify-button" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                     Verify
+                 </button>
+             </div>
+        </div>
+        
+        <div id="results-section" class="pt-6 border-t border-gray-700">
+             <div class="flex justify-between items-center mb-4">
+                 <h2 class="text-xl font-semibold">Possible Words</h2>
+                 <p id="results-count" class="text-gray-300 bg-gray-700 px-3 py-1 rounded-full text-sm font-medium"></p>
+             </div>
+             <div id="results-output" class="bg-gray-900 p-4 rounded-lg min-h-[100px] max-h-64 overflow-y-auto flex flex-wrap gap-2 justify-center">
+                 <p class="text-gray-500">Enter games above and click "Solve".</p>
+             </div>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- Element References ---
+        const friendsContainer = document.getElementById('friends-container');
+        const addFriendButton = document.getElementById('add-friend-button');
+        const solverButton = document.getElementById('solver-button');
+        const verifyButton = document.getElementById('verify-button');
+        const knownSolutionInput = document.getElementById('known-solution-input');
+        const statusText = document.getElementById('status-text');
+        const resultsOutput = document.getElementById('results-output');
+        const resultsCount = document.getElementById('results-count');
+        let friendCount = 0;
+        let socket;
+
+        // --- WebSocket Logic ---
+        const connectWebSocket = () => {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const socketUrl = `${protocol}//${window.location.host}/ws`;
+            socket = new WebSocket(socketUrl);
+
+            socket.onopen = () => {
+                console.log('WebSocket connection established.');
+                statusText.textContent = "Ready to solve.";
+                solverButton.disabled = false;
+                verifyButton.disabled = false;
+            };
+
+            socket.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                
+                if (message.status) { statusText.textContent = message.status; }
+                
+                if (message.possibleWords !== undefined) {
+                    displayResults(message.possibleWords);
+                    const resultCount = message.possibleWords.length;
+                    statusText.textContent = `Analysis complete. Found ${resultCount} possible word(s).`;
+                    solverButton.disabled = false;
+                    verifyButton.disabled = false;
+                    solverButton.textContent = 'Solve';
+                }
+
+                if (message.error) {
+                    console.error('Backend Error:', message.error);
+                    statusText.innerHTML = `<strong class="text-red-500">Error: ${message.error}</strong>`;
+                    solverButton.disabled = false;
+                    verifyButton.disabled = false;
+                    solverButton.textContent = 'Solve';
+                }
+            };
+
+            socket.onclose = () => {
+                console.log('WebSocket connection closed. Attempting to reconnect...');
+                statusText.innerHTML = `<strong class="text-yellow-500">Connection lost. Reconnecting...</strong>`;
+                solverButton.disabled = true;
+                verifyButton.disabled = true;
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            socket.onerror = (error) => {
+                console.error('WebSocket Error:', error);
+                statusText.innerHTML = `<strong class="text-red-500">Error: Could not connect to backend.</strong>`;
+                solverButton.disabled = true;
+                verifyButton.disabled = true;
+                socket.close();
+            };
+        };
+
+        // --- Grid and Pattern UI Logic ---
+        const createPatternRow = (container) => {
+            if (container.children.length >= 6) return;
+            const rowId = `row-${Date.now()}`;
+            const row = document.createElement('div');
+            row.id = rowId;
+            row.className = 'pattern-row flex items-center gap-2';
+            const patternContainer = document.createElement('div');
+            patternContainer.className = 'flex-grow grid grid-cols-5 gap-1.5';
+            for (let i = 0; i < 5; i++) {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.maxLength = 1;
+                input.className = 'pattern-input input-default w-full h-full aspect-square';
+                patternContainer.appendChild(input);
+            }
+            row.appendChild(patternContainer);
+            const removeButton = document.createElement('button');
+            removeButton.innerHTML = '&times;';
+            removeButton.className = 'w-8 h-8 text-xl bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-full flex items-center justify-center transition-colors flex-shrink-0';
+            removeButton.onclick = () => document.getElementById(rowId).remove();
+            row.appendChild(removeButton);
+            container.appendChild(row);
+        };
+
+        const createFriendGrid = () => {
+            friendCount++;
+            const grid = document.createElement('div');
+            grid.id = `friend-${friendCount}`;
+            grid.className = 'friend-grid bg-gray-700/50 p-4 rounded-xl space-y-3';
+            grid.innerHTML = `
+                <div class="flex justify-between items-center">
+                    <h3 class="text-lg font-bold text-white">Friend ${friendCount}</h3>
+                    <button class="remove-grid-btn text-sm bg-red-800 hover:bg-red-700 text-white font-semibold py-1 px-3 rounded-md transition-colors">Remove Grid</button>
+                </div>
+                <div class="patterns-container space-y-2"></div>
+                <button class="add-row-btn w-full bg-gray-600 hover:bg-gray-500 text-white text-sm font-semibold py-1.5 rounded-md transition-colors">+ Add Pattern Row</button>
+            `;
+            const patternsContainer = grid.querySelector('.patterns-container');
+            friendsContainer.appendChild(grid);
+            createPatternRow(patternsContainer);
+        };
+
+        friendsContainer.addEventListener('click', e => {
+            if (e.target.classList.contains('remove-grid-btn')) e.target.closest('.friend-grid').remove();
+            if (e.target.classList.contains('add-row-btn')) createPatternRow(e.target.previousElementSibling);
+        });
+
+        friendsContainer.addEventListener('input', e => {
+            const target = e.target;
+            if (!target.classList.contains('pattern-input')) return;
+            const key = target.value.toUpperCase();
+            target.className = 'pattern-input w-full h-full aspect-square ';
+            if (['G', 'Y', 'B'].includes(key)) {
+                target.classList.add(`input-${key}`);
+                const nextInput = target.nextElementSibling || target.closest('.pattern-row').nextElementSibling?.querySelector('.pattern-input');
+                if (nextInput) nextInput.focus();
+            } else {
+                target.value = '';
+                target.classList.add('input-default');
+            }
+        });
+
+        friendsContainer.addEventListener('keydown', e => {
+            if (e.key === 'Backspace' && e.target.value === '' && e.target.classList.contains('pattern-input')) {
+                const prevInput = e.target.previousElementSibling;
+                if (prevInput) prevInput.focus();
+            }
+        });
+        
+        knownSolutionInput.addEventListener('input', (e) => {
+            e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, '');
+        });
+
+        function getGridsFromUI() {
+            const grids = [];
+            document.querySelectorAll('.friend-grid').forEach(gridEl => {
+                const grid = [];
+                gridEl.querySelectorAll('.pattern-row').forEach(rowEl => {
+                    let pattern = '';
+                    let isValid = true;
+                    rowEl.querySelectorAll('.pattern-input').forEach(input => {
+                        const val = input.value.toUpperCase();
+                        if (!['G', 'Y', 'B'].includes(val)) isValid = false;
+                        pattern += val;
+                    });
+                    if (pattern.length === 5 && isValid) grid.push(pattern);
+                });
+                if (grid.length > 0) grids.push(grid);
+            });
+            return grids;
+        }
+
+        const solve = () => {
+            const grids = getGridsFromUI();
+            if (grids.length === 0) {
+                statusText.textContent = 'Please enter at least one complete 5-letter pattern.';
+                return;
+            }
+            if (!socket || socket.readyState !== WebSocket.OPEN) {
+                statusText.innerHTML = `<strong class="text-red-500">Not connected to server.</strong>`;
+                return;
+            }
+
+            const payload = { type: "solve", grids: grids };
+            solverButton.disabled = true;
+            verifyButton.disabled = true;
+            solverButton.textContent = 'Solving...';
+            statusText.textContent = 'Sending job to backend...';
+            resultsOutput.innerHTML = '<p class="text-gray-500">Calculating...</p>';
+            resultsCount.textContent = '';
+            socket.send(JSON.stringify(payload));
+        };
+        
+        const verify = () => {
+            const grids = getGridsFromUI();
+            const solution = knownSolutionInput.value.toLowerCase();
+            if (solution.length !== 5) {
+                statusText.innerHTML = `<strong class="text-yellow-500">Please enter a 5-letter word to verify.</strong>`;
+                return;
+            }
+            if (grids.length === 0) {
+                statusText.innerHTML = `<strong class="text-yellow-500">Please enter at least one grid to verify against.</strong>`;
+                return;
+            }
+            if (!socket || socket.readyState !== WebSocket.OPEN) {
+                statusText.innerHTML = `<strong class="text-red-500">Not connected to server.</strong>`;
+                return;
+            }
+            
+            const payload = { type: "verify", grids: grids, knownSolution: solution };
+            
+            verifyButton.disabled = true; 
+            statusText.textContent = `Verifying word '${solution.toUpperCase()}'...`;
+            socket.send(JSON.stringify(payload));
+        };
+
+        const displayResults = (matches) => {
+            resultsCount.textContent = `${matches.length} found`;
+            resultsOutput.innerHTML = '';
+            
+            verifyButton.disabled = false;
+
+            if (matches.length === 0) {
+                resultsOutput.innerHTML = '<p class="text-gray-400 font-semibold">No matching words found.</p>';
+                return;
+            }
+            matches.sort().forEach(word => {
+                const el = document.createElement('span');
+                el.className = 'bg-blue-900/70 text-blue-200 text-base font-medium px-4 py-1.5 rounded-lg';
+                el.textContent = word.toUpperCase();
+                resultsOutput.appendChild(el);
+            });
+        };
+
+        // --- Event Listeners and Initialisation ---
+        addFriendButton.addEventListener('click', createFriendGrid);
+        solverButton.addEventListener('click', solve);
+        verifyButton.addEventListener('click', verify);
+        
+        createFriendGrid();
+        connectWebSocket();
+    });
+    </script>
+</body>
+</html>
